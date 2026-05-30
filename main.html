@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLO Live Detector</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green: #39ff14;
+    --green-dim: rgba(57,255,20,0.15);
+    --green-glow: rgba(57,255,20,0.4);
+    --red: #ff4444;
+    --amber: #ffb800;
+    --bg: #080c08;
+    --bg2: #0d120d;
+    --surface: #111911;
+    --border: rgba(57,255,20,0.12);
+    --text: #d4e8d4;
+    --muted: rgba(212,232,212,0.4);
+    --mono: 'JetBrains Mono', monospace;
+    --display: 'Syne', sans-serif;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* ── Top bar ── */
+  #topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    height: 48px;
+    position: relative;
+    z-index: 10;
+  }
+
+  .logo {
+    font-family: var(--display);
+    font-weight: 800;
+    font-size: 16px;
+    letter-spacing: 0.05em;
+    color: var(--green);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .blink-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: blink 1.2s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  .topbar-stats {
+    display: flex;
+    gap: 24px;
+    align-items: center;
+  }
+
+  .tstat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .tstat-val {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--green);
+    line-height: 1;
+  }
+
+  .tstat-lbl {
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  /* ── Layout ── */
+  #layout {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    height: calc(100vh - 48px);
+  }
+
+  /* ── Video area ── */
+  #cam-wrap {
+    position: relative;
+    background: #000;
+    overflow: hidden;
+  }
+
+  #video {
+    position: absolute;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+  }
+
+  #overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    transform: scaleX(-1);
+  }
+
+  .scanline {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, var(--green) 50%, transparent 100%);
+    opacity: 0.5;
+    pointer-events: none;
+    animation: sweep 4s linear infinite;
+  }
+  @keyframes sweep { from{top:0} to{top:100%} }
+
+  .corner-frame {
+    position: absolute;
+    width: 20px; height: 20px;
+    pointer-events: none;
+  }
+  .corner-frame.tl { top: 12px; left: 12px; border-top: 2px solid var(--green); border-left: 2px solid var(--green); }
+  .corner-frame.tr { top: 12px; right: 12px; border-top: 2px solid var(--green); border-right: 2px solid var(--green); }
+  .corner-frame.bl { bottom: 12px; left: 12px; border-bottom: 2px solid var(--green); border-left: 2px solid var(--green); }
+  .corner-frame.br { bottom: 12px; right: 12px; border-bottom: 2px solid var(--green); border-right: 2px solid var(--green); }
+
+  #cam-label {
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+
+  /* ── Status overlay ── */
+  #status-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8,12,8,0.85);
+    z-index: 5;
+    gap: 16px;
+  }
+
+  #status-overlay.hidden { display: none; }
+
+  .status-icon {
+    font-size: 40px;
+    color: var(--green);
+    animation: spin 1.5s linear infinite;
+  }
+  @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
+  #status-text {
+    font-family: var(--display);
+    font-size: 15px;
+    color: var(--green);
+    letter-spacing: 0.05em;
+  }
+
+  #status-sub {
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    max-width: 280px;
+    line-height: 1.6;
+  }
+
+  #start-btn {
+    padding: 10px 28px;
+    background: var(--green-dim);
+    border: 1px solid var(--green);
+    color: var(--green);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 4px;
+    cursor: pointer;
+    letter-spacing: 0.08em;
+    transition: background 0.15s;
+    display: none;
+  }
+  #start-btn:hover { background: rgba(57,255,20,0.25); }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 14px;
+  }
+
+  .panel-title {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  /* Detection list */
+  #det-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  #det-list::-webkit-scrollbar { width: 3px; }
+  #det-list::-webkit-scrollbar-track { background: transparent; }
+  #det-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .det-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--surface);
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    animation: slideIn 0.2s ease;
+  }
+  @keyframes slideIn { from{opacity:0;transform:translateX(6px)} to{opacity:1;transform:translateX(0)} }
+
+  .det-swatch {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .det-name {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .det-pct {
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .det-bar-wrap {
+    margin-top: 3px;
+    height: 2px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+  .det-bar { height: 100%; border-radius: 1px; transition: width 0.3s; }
+
+  /* Controls */
+  .ctrl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .ctrl-lbl {
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .ctrl-val {
+    font-size: 10px;
+    color: var(--green);
+    font-weight: 700;
+  }
+
+  input[type=range] {
+    width: 100%;
+    -webkit-appearance: none;
+    height: 3px;
+    background: rgba(57,255,20,0.15);
+    border-radius: 2px;
+    outline: none;
+    margin-top: 4px;
+    margin-bottom: 10px;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--green);
+    cursor: pointer;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .toggle-lbl { font-size: 10px; color: var(--muted); }
+
+  .toggle {
+    width: 32px; height: 16px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 8px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .toggle.on { background: var(--green-dim); border-color: var(--green); }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.3);
+    transition: left 0.2s, background 0.2s;
+  }
+  .toggle.on::after { left: 18px; background: var(--green); }
+
+  /* Log */
+  #log-wrap {
+    flex: 1;
+    padding: 10px 14px;
+    overflow-y: auto;
+  }
+  #log-wrap::-webkit-scrollbar { width: 3px; }
+  #log-wrap::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .log-title {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .log-line {
+    font-size: 9px;
+    padding: 2px 0 2px 7px;
+    border-left: 2px solid transparent;
+    margin-bottom: 2px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .log-line.ok { border-color: var(--green); color: rgba(57,255,20,0.65); }
+  .log-line.warn { border-color: var(--amber); color: rgba(255,184,0,0.65); }
+  .log-line.info { border-color: #60a5fa; color: rgba(96,165,250,0.65); }
+
+  /* Bottom mini stats */
+  #bottombar {
+    grid-column: 1/-1;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 32px;
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+  }
+
+  .bstat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 16px;
+    border-right: 1px solid var(--border);
+    height: 100%;
+    font-size: 10px;
+  }
+
+  .bstat-lbl { color: var(--muted); }
+  .bstat-val { color: var(--green); font-weight: 700; }
+
+  #model-bar {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  #model-progress {
+    flex: 1;
+    height: 2px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+  #model-progress-fill {
+    height: 100%;
+    background: var(--green);
+    border-radius: 1px;
+    transition: width 0.4s;
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">
+    <div class="blink-dot"></div>
+    YOLO · LIVE
+  </div>
+  <div class="topbar-stats">
+    <div class="tstat"><div class="tstat-val" id="fps-val">--</div><div class="tstat-lbl">FPS</div></div>
+    <div class="tstat"><div class="tstat-val" id="inf-val">-- ms</div><div class="tstat-lbl">Inference</div></div>
+    <div class="tstat"><div class="tstat-val" id="obj-val">0</div><div class="tstat-lbl">Objects</div></div>
+    <div class="tstat"><div class="tstat-val" id="conf-top-val">--</div><div class="tstat-lbl">Top Conf</div></div>
+  </div>
+</div>
+
+<div id="layout">
+  <div id="cam-wrap">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+    <div class="scanline"></div>
+    <div class="corner-frame tl"></div>
+    <div class="corner-frame tr"></div>
+    <div class="corner-frame bl"></div>
+    <div class="corner-frame br"></div>
+    <div id="cam-label">WEBCAM · LIVE</div>
+
+    <div id="status-overlay">
+      <div class="status-icon">⟳</div>
+      <div id="status-text">INITIALIZING</div>
+      <div id="status-sub">Loading TensorFlow.js and COCO-SSD model weights. This may take 10–20 seconds on first load.</div>
+      <button id="start-btn" onclick="startCamera()">GRANT CAMERA ACCESS</button>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div class="panel">
+      <div class="panel-title">Detections</div>
+      <div id="det-list"><div class="det-row"><span class="det-name" style="color:var(--muted)">Waiting for model...</span></div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Settings</div>
+
+      <div class="ctrl-row">
+        <span class="ctrl-lbl">CONF THRESHOLD</span>
+        <span class="ctrl-val" id="conf-lbl">0.45</span>
+      </div>
+      <input type="range" id="conf-slider" min="10" max="95" value="45" step="1" oninput="confThresh=this.value/100; document.getElementById('conf-lbl').textContent=(this.value/100).toFixed(2)">
+
+      <div class="ctrl-row">
+        <span class="ctrl-lbl">MAX DETECTIONS</span>
+        <span class="ctrl-val" id="maxdet-lbl">20</span>
+      </div>
+      <input type="range" id="maxdet-slider" min="1" max="40" value="20" step="1" oninput="maxDets=parseInt(this.value); document.getElementById('maxdet-lbl').textContent=this.value">
+
+      <div class="toggle-row">
+        <span class="toggle-lbl">SHOW LABELS</span>
+        <div class="toggle on" id="tog-labels" onclick="this.classList.toggle('on'); showLabels=this.classList.contains('on')"></div>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-lbl">SHOW CONFIDENCE</span>
+        <div class="toggle on" id="tog-conf" onclick="this.classList.toggle('on'); showConf=this.classList.contains('on')"></div>
+      </div>
+      <div class="toggle-row">
+        <span class="toggle-lbl">MIRROR VIDEO</span>
+        <div class="toggle on" id="tog-mirror" onclick="toggleMirror(this)"></div>
+      </div>
+    </div>
+
+    <div id="log-wrap">
+      <div class="log-title">Event Log</div>
+      <div id="log-lines"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const statusOverlay = document.getElementById('status-overlay');
+const statusText = document.getElementById('status-text');
+const statusSub = document.getElementById('status-sub');
+const startBtn = document.getElementById('start-btn');
+
+let model = null;
+let confThresh = 0.45;
+let maxDets = 20;
+let showLabels = true;
+let showConf = true;
+let mirrored = true;
+
+let fps = 0, lastFrameTime = performance.now(), frameCount = 0;
+let running = false;
+
+const PALETTE = [
+  '#39ff14','#00e5ff','#ff4081','#ffeb3b','#ff6d00',
+  '#e040fb','#00bfa5','#ff1744','#64dd17','#2979ff',
+  '#f50057','#00b0ff','#76ff03','#ff9100','#d500f9',
+];
+
+const classColors = {};
+function getColor(cls) {
+  if (!classColors[cls]) {
+    const idx = Object.keys(classColors).length % PALETTE.length;
+    classColors[cls] = PALETTE[idx];
+  }
+  return classColors[cls];
+}
+
+function addLog(msg, type='info') {
+  const el = document.getElementById('log-lines');
+  const d = document.createElement('div');
+  d.className = `log-line ${type}`;
+  const t = new Date().toLocaleTimeString('en', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  d.textContent = `[${t}] ${msg}`;
+  el.insertBefore(d, el.firstChild);
+  if (el.children.length > 40) el.removeChild(el.lastChild);
+}
+
+function setStatus(text, sub, showButton=false) {
+  statusText.textContent = text;
+  statusSub.textContent = sub;
+  startBtn.style.display = showButton ? 'block' : 'none';
+}
+
+async function startCamera() {
+  startBtn.style.display = 'none';
+  setStatus('REQUESTING CAMERA', 'Please allow camera access in your browser.');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width:{ideal:1280}, height:{ideal:720}, facingMode:'user' }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    addLog('Camera stream started', 'ok');
+    setStatus('LOADING MODEL', 'Downloading COCO-SSD weights (~5MB)...');
+    loadModel();
+  } catch(e) {
+    setStatus('CAMERA ERROR', e.message || 'Could not access camera. Check permissions.');
+    addLog('Camera error: ' + e.message, 'warn');
+    startBtn.style.display = 'block';
+    startBtn.textContent = 'RETRY';
+  }
+}
+
+async function loadModel() {
+  try {
+    addLog('Loading cocoSsd model...', 'info');
+    model = await cocoSsd.load({ base: 'mobilenet_v2' });
+    addLog('Model loaded: COCO-SSD MobileNetV2', 'ok');
+    addLog('80 classes active', 'ok');
+    statusOverlay.classList.add('hidden');
+    running = true;
+    requestAnimationFrame(detectLoop);
+  } catch(e) {
+    setStatus('MODEL LOAD FAILED', e.message);
+    addLog('Model error: ' + e.message, 'warn');
+  }
+}
+
+function resizeOverlay() {
+  overlay.width = video.videoWidth || video.clientWidth;
+  overlay.height = video.videoHeight || video.clientHeight;
+}
+
+let lastDetections = [];
+let lastInfTime = 0;
+let lastLogFrame = 0;
+let frameIdx = 0;
+
+async function detectLoop(now) {
+  if (!running) return;
+
+  frameIdx++;
+  frameCount++;
+
+  const dt = now - lastFrameTime;
+  if (dt >= 500) {
+    fps = Math.round(frameCount / (dt / 1000));
+    frameCount = 0;
+    lastFrameTime = now;
+    document.getElementById('fps-val').textContent = fps;
+  }
+
+  resizeOverlay();
+
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+  if (video.readyState >= 2) {
+    const t0 = performance.now();
+    try {
+      const preds = await model.detect(video, maxDets, confThresh);
+      lastInfTime = Math.round(performance.now() - t0);
+      lastDetections = preds;
+    } catch(e) { /* skip frame */ }
+  }
+
+  drawDetections(lastDetections);
+  updateSidebar(lastDetections);
+
+  document.getElementById('inf-val').textContent = lastInfTime + ' ms';
+
+  if (frameIdx - lastLogFrame > 90 && lastDetections.length > 0) {
+    lastLogFrame = frameIdx;
+    const top = lastDetections[0];
+    addLog(`Detected: ${top.class} (${Math.round(top.score*100)}%)`, 'ok');
+  }
+
+  requestAnimationFrame(detectLoop);
+}
+
+function drawDetections(preds) {
+  const W = overlay.width, H = overlay.height;
+
+  preds.forEach(p => {
+    if (p.score < confThresh) return;
+    const [x, y, w, h] = p.bbox;
+    const color = getColor(p.class);
+    const conf = Math.round(p.score * 100);
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x, y, w, h);
+
+    ctx.fillStyle = color + '18';
+    ctx.fillRect(x, y, w, h);
+
+    const cLen = 14;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = color;
+    [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]].forEach(([cx,cy,sx,sy]) => {
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+sx*cLen,cy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx,cy+sy*cLen); ctx.stroke();
+    });
+
+    if (showLabels) {
+      const label = showConf ? `${p.class} ${conf}%` : p.class;
+      ctx.font = 'bold 11px JetBrains Mono, monospace';
+      const tw = ctx.measureText(label).width;
+      const lx = x;
+      const ly = y > 22 ? y : y + h + 16;
+      ctx.fillStyle = color;
+      ctx.fillRect(lx, ly - 14, tw + 10, 16);
+      ctx.fillStyle = '#080c08';
+      ctx.fillText(label, lx + 5, ly - 2);
+    }
+
+    const cx = x + w/2, cy2 = y + h/2;
+    ctx.beginPath();
+    ctx.arc(cx, cy2, 3, 0, Math.PI*2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  });
+}
+
+function updateSidebar(preds) {
+  const sorted = [...preds].sort((a,b) => b.score - a.score);
+  document.getElementById('obj-val').textContent = sorted.length;
+  document.getElementById('conf-top-val').textContent = sorted.length ? Math.round(sorted[0].score*100) + '%' : '--';
+
+  const list = document.getElementById('det-list');
+  if (sorted.length === 0) {
+    list.innerHTML = '<div class="det-row"><span class="det-name" style="color:var(--muted)">No objects detected</span></div>';
+    return;
+  }
+
+  list.innerHTML = sorted.slice(0, 10).map(p => {
+    const color = getColor(p.class);
+    const conf = Math.round(p.score * 100);
+    const barColor = conf > 75 ? 'var(--green)' : conf > 55 ? 'var(--amber)' : 'var(--red)';
+    return `<div class="det-row">
+      <div class="det-swatch" style="background:${color}"></div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between">
+          <span class="det-name">${p.class}</span>
+          <span class="det-pct">${conf}%</span>
+        </div>
+        <div class="det-bar-wrap"><div class="det-bar" style="width:${conf}%;background:${barColor}"></div></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleMirror(el) {
+  el.classList.toggle('on');
+  mirrored = el.classList.contains('on');
+  video.style.transform = mirrored ? 'scaleX(-1)' : 'scaleX(1)';
+  overlay.style.transform = mirrored ? 'scaleX(-1)' : 'scaleX(1)';
+}
+
+// Boot
+(async () => {
+  addLog('System init', 'info');
+  addLog('TF.js loading...', 'info');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('UNSUPPORTED BROWSER', 'Use Chrome, Firefox, or Edge with camera support.');
+    addLog('getUserMedia not supported', 'warn');
+    return;
+  }
+
+  setStatus('READY', 'Click the button to grant camera access and start detection.', true);
+  startBtn.style.display = 'block';
+  startBtn.textContent = 'START CAMERA';
+})();
+</script>
+</body>
+</html>
