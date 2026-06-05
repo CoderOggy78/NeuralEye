@@ -12,7 +12,7 @@
 
 ## What is NeuralEye?
 
-NeuralEye is a **fully browser-based, real-time object detection app** that uses your webcam to identify and label everyday objects in live video — with zero server, zero API keys, and zero installation required.
+NeuralEye is a **fully browser-based, real-time object detection app** that uses your webcam to identify and label everyday objects in live video — with zero server, zero API keys, and zero installation required. 
 
 It runs the **COCO-SSD MobileNetV2** model entirely on your device using TensorFlow.js, achieving 15–30 FPS on modern hardware. It's built as a single self-contained HTML file — the entire app is ~300 lines.
 
