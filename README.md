@@ -1,4 +1,4 @@
-# 👁️ NeuralEye — Real-Time Object Detection in the Browser
+# 👁️ NeuralEye — Real-Time Object Detection in the Browser 
 
 > Live webcam object detection powered by TensorFlow.js + COCO-SSD. No backend, no API keys, no installation. Just open and detect.
 
